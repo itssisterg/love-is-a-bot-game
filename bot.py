@@ -3,6 +3,12 @@ Love is a Bot Game - Telegram Dating Game Bot
 Created by @itssisterg
 GitHub: https://github.com/itssisterg
 """
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # load variables from .env file
+
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -403,7 +409,7 @@ async def handle_final_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✨ *Your Partner's Personality:* {personality}\n"
         f"🌟 *Your Top Moment:* {top_moment}\n\n"
         f"Thanks for playing *Love is a Bot Game*! 🎉\n"
-        f"Share the fun with your friends: https://t.me/love-is-a-bot-game"
+        f"Share the fun with your friends: https://t.me/LoveIsABotGameBot"
     )
 
     await query.edit_message_text(summary, parse_mode='Markdown')
