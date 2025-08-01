@@ -411,7 +411,7 @@ async def handle_final_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(summary, parse_mode='Markdown')
 
 def main():
-    app = ApplicationBuilder().token("YOUR_BOT_TOKEN").build()
+    app = ApplicationBuilder().token("BOT_TOKEN").build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(button))
     app.run_polling()
