@@ -3,11 +3,10 @@ Love is a Bot Game - Telegram Dating Game Bot
 Created by @itssisterg
 GitHub: https://github.com/itssisterg
 """
-import os
-BOT_TOKEN = "7998825655:AAHbc2Pfkl6iqfM4ZI1iv-RmUhhJIGW5SCI"
 
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 user_sessions = {}
 
@@ -21,6 +20,9 @@ class GameSession:
         self.day = 1
         self.relationship_score = 0
         self.daily_decisions = {}
+        self.interaction_in_progress = False
+        self.interaction_partner = None
+        self.interaction_step = 0
         self.potential_partners = {
             "girls": ["alice", "bea", "cara", "diana", "eva"],
             "guys": ["tom", "nick", "leo", "sam", "max"]
@@ -44,12 +46,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text("Welcome to Love is a Bot Game!\nChoose your role:", reply_markup=InlineKeyboardMarkup(keyboard))
 
+async def restart(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in user_sessions:
+        del user_sessions[user_id]  # Clear session
+    keyboard = [
+        [InlineKeyboardButton("Play as Girl", callback_data="gender_girl")],
+        [InlineKeyboardButton("Play as Guy", callback_data="gender_guy")]
+    ]
+    await update.message.reply_text(
+        "Game restarted! Welcome back to Love is a Bot Game!\nChoose your role:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     session = user_sessions.get(user_id)
     data = query.data
+
+    if session is None and not data.startswith("gender_"):
+        await query.edit_message_text("Please start a new game with /start or /restart.")
+        return
+
+    # If interaction is in progress, handle interaction choices only
+    if session and session.interaction_in_progress:
+        await handle_interaction_button(update, context)
+        return
 
     if data.startswith("gender_"):
         session.gender = data.split("_")[1]
@@ -116,6 +140,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("final_pick_"):
         await handle_final_pick(update, context)
 
+    elif data.startswith("interact_"):
+        # Player chose a partner to interact with
+        partner_key = data[len("interact_"):]
+        await start_interaction(query, session, partner_key)
+
 async def begin_day_one(query, session):
     keyboard = [
         [InlineKeyboardButton("Go on a date", callback_data="day1_date")],
@@ -123,23 +152,17 @@ async def begin_day_one(query, session):
         [InlineKeyboardButton("Explore the location", callback_data="day1_explore")]
     ]
     await query.message.reply_text(
-        "🌞 Day 1: You’ve just arrived and everyone’s mingling.\nWhat do you want to do?",
+        f"🌞 Day 1: You’ve just arrived and everyone’s mingling.\nWhat do you want to do?",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def handle_day1_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_day_action(update: Update, context: ContextTypes.DEFAULT_TYPE, day_prefix, scores, msgs, next_day_func):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
     session = user_sessions.get(user_id)
     choice = query.data
 
-    scores = {"day1_date": 1, "day1_drama": -1, "day1_explore": 0}
-    msgs = {
-        "day1_date": "You went on a sweet date! Sparks might be flying... 💕",
-        "day1_drama": "You stirred the pot! Drama alert! 🔥",
-        "day1_explore": "You explored the grounds and uncovered a secret spot. 🗺️"
-    }
     score = scores.get(choice, 0)
     msg = msgs.get(choice, "You did nothing notable.")
 
@@ -152,10 +175,21 @@ async def handle_day1_action(update: Update, context: ContextTypes.DEFAULT_TYPE)
         msg += "\nPeople are wary of your drama-making ways."
 
     session.relationship_score += score
-    session.day += 1
+    day_msg = f"Day {session.day} update:\n{msg}"  # Add day header here
 
-    await query.edit_message_text(f"{msg}")
-    await begin_day_two(query, session)
+    # Instead of progressing day here, wait for interaction phase next
+    # Show daily update then prompt to pick partner to interact with
+    await query.edit_message_text(day_msg)
+    await prompt_interaction(query, session)
+
+async def handle_day1_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    scores = {"day1_date": 1, "day1_drama": -1, "day1_explore": 0}
+    msgs = {
+        "day1_date": "You went on a sweet date! Sparks might be flying... 💕",
+        "day1_drama": "You stirred the pot! Drama alert! 🔥",
+        "day1_explore": "You explored the grounds and uncovered a secret spot. 🗺️"
+    }
+    await handle_day_action(update, context, "day1", scores, msgs, begin_day_two)
 
 async def begin_day_two(query, session):
     impact = calculate_weighted_impact(session, 2)
@@ -174,34 +208,13 @@ async def begin_day_two(query, session):
     await query.message.reply_text(f"🌅 Day 2: {intro}\nChoose your next move:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_day2_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    session = user_sessions.get(user_id)
-    choice = query.data
-
     scores = {"day2_group": 1, "day2_flirt": 1, "day2_spy": -1}
     msgs = {
         "day2_group": "You organized a fun group event! Everyone’s bonding. 🤗",
         "day2_flirt": "You flirted successfully! Chemistry is building. 💘",
         "day2_spy": "You got caught spying! People are suspicious. 👀"
     }
-    score = scores.get(choice, 0)
-    msg = msgs.get(choice, "You stayed low-key today.")
-
-    session.daily_decisions[session.day] = score
-    impact = calculate_weighted_impact(session, session.day + 1)
-
-    if impact > 0.5:
-        msg += "\nYour reputation continues to improve!"
-    elif impact < -0.5:
-        msg += "\nTension is rising around you."
-
-    session.relationship_score += score
-    session.day += 1
-
-    await query.edit_message_text(f"{msg}")
-    await begin_day_three(query, session)
+    await handle_day_action(update, context, "day2", scores, msgs, begin_day_three)
 
 async def begin_day_three(query, session):
     impact = calculate_weighted_impact(session, 3)
@@ -220,34 +233,13 @@ async def begin_day_three(query, session):
     await query.message.reply_text(f"🌞 Day 3: {intro}\nChoose your action:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_day3_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    session = user_sessions.get(user_id)
-    choice = query.data
-
     scores = {"day3_talent": 1, "day3_secret": 0, "day3_rumor": -1}
     msgs = {
         "day3_talent": "Your talent wowed everyone! Popularity rises. 🌟",
         "day3_secret": "You shared something personal, building trust. 🤫",
         "day3_rumor": "The rumor you started caused drama. Brace yourself. 💥"
     }
-    score = scores.get(choice, 0)
-    msg = msgs.get(choice, "You kept a low profile today.")
-
-    session.daily_decisions[session.day] = score
-    impact = calculate_weighted_impact(session, session.day + 1)
-
-    if impact > 0.5:
-        msg += "\nYour influence keeps growing!"
-    elif impact < -0.5:
-        msg += "\nPeople are cautious around you."
-
-    session.relationship_score += score
-    session.day += 1
-
-    await query.edit_message_text(f"{msg}")
-    await begin_day_four(query, session)
+    await handle_day_action(update, context, "day3", scores, msgs, begin_day_four)
 
 async def begin_day_four(query, session):
     impact = calculate_weighted_impact(session, 4)
@@ -266,34 +258,13 @@ async def begin_day_four(query, session):
     await query.message.reply_text(f"🌞 Day 4: {intro}\nChoose your strategy:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_day4_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    session = user_sessions.get(user_id)
-    choice = query.data
-
     scores = {"day4_party": 1, "day4_confront": -1, "day4_retreat": 0}
     msgs = {
         "day4_party": "The surprise party was a hit! Bonds deepen. 🎉",
         "day4_confront": "The confrontation escalated tensions. ⚔️",
         "day4_retreat": "You found peace and clarity alone. 🧘"
     }
-    score = scores.get(choice, 0)
-    msg = msgs.get(choice, "You stayed quiet and observed.")
-
-    session.daily_decisions[session.day] = score
-    impact = calculate_weighted_impact(session, session.day + 1)
-
-    if impact > 0.5:
-        msg += "\nYour power in the game is undeniable!"
-    elif impact < -0.5:
-        msg += "\nYour rivals are plotting carefully."
-
-    session.relationship_score += score
-    session.day += 1
-
-    await query.edit_message_text(f"{msg}")
-    await begin_day_five(query, session)
+    await handle_day_action(update, context, "day4", scores, msgs, begin_day_five)
 
 async def begin_day_five(query, session):
     impact = calculate_weighted_impact(session, 5)
@@ -312,34 +283,134 @@ async def begin_day_five(query, session):
     await query.message.reply_text(f"🌅 Day 5: {intro}\nChoose your final move before picking a partner:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_day5_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    session = user_sessions.get(user_id)
-    choice = query.data
-
     scores = {"day5_speech": 1, "day5_crush": 1, "day5_party": 0}
     msgs = {
         "day5_speech": "Your speech moved everyone deeply. ❤️",
         "day5_crush": "You revealed your crush and hearts fluttered. 💓",
         "day5_party": "The party was wild and unforgettable! 🎊"
     }
-    score = scores.get(choice, 0)
-    msg = msgs.get(choice, "You prepared quietly for the final choice.")
+    await handle_day_action(update, context, "day5", scores, msgs, present_final_pick)
 
-    session.daily_decisions[session.day] = score
-    impact = calculate_weighted_impact(session, session.day + 1)
+async def prompt_interaction(query, session):
+    # After daily choice, prompt user to pick a partner to interact with
+    gender = session.gender
+    partners = []
+    if gender == "girl":
+        partners = session.potential_partners["guys"]
+    else:
+        partners = session.potential_partners["girls"]
 
-    if impact > 0.5:
-        msg += "\nYour legacy here will not be forgotten!"
-    elif impact < -0.5:
-        msg += "\nDrama marks your final day."
+    keyboard = []
+    for p in partners:
+        keyboard.append([InlineKeyboardButton(p.title(), callback_data=f"interact_{p}")])
 
-    session.relationship_score += score
-    session.day += 1
+    await query.message.reply_text(
+        f"Day {session.day}: Who would you like to interact with for 5 minutes? Your choice affects your relationship.",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
-    await query.edit_message_text(f"{msg}\n\nNow, it's time to pick your partner!")
-    await present_final_pick(query, session)
+async def start_interaction(query, session, partner_key):
+    session.interaction_in_progress = True
+    session.interaction_partner = partner_key
+    session.interaction_step = 1
+
+    await query.edit_message_text(
+        f"Starting 5-minute interaction with {partner_key.title()}.\n\n"
+        "Q1: They ask — What’s your idea of a perfect date?\n"
+        "Choose your response:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Something adventurous!", callback_data="interaction_1_adventure")],
+            [InlineKeyboardButton("Cozy and quiet night in.", callback_data="interaction_1_cozy")],
+            [InlineKeyboardButton("A big party with friends!", callback_data="interaction_1_party")]
+        ])
+    )
+
+async def handle_interaction_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    session = user_sessions.get(user_id)
+    data = query.data
+
+    # Only handle interaction callbacks here
+    if not data.startswith("interaction_"):
+        await query.edit_message_text("Invalid interaction response.")
+        session.interaction_in_progress = False
+        return
+
+    step = session.interaction_step
+
+    if step == 1:
+        # Handle Q1 responses
+        mapping = {
+            "interaction_1_adventure": 1,
+            "interaction_1_cozy": 2,
+            "interaction_1_party": 0
+        }
+        choice_score = mapping.get(data, 0)
+        session.relationship_score += choice_score
+
+        session.interaction_step = 2
+        await query.edit_message_text(
+            f"Q2: {session.interaction_partner.title()} asks — What do you value most in a partner?\nChoose:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Loyalty", callback_data="interaction_2_loyalty")],
+                [InlineKeyboardButton("Humor", callback_data="interaction_2_humor")],
+                [InlineKeyboardButton("Ambition", callback_data="interaction_2_ambition")]
+            ])
+        )
+    elif step == 2:
+        mapping = {
+            "interaction_2_loyalty": 2,
+            "interaction_2_humor": 1,
+            "interaction_2_ambition": 0
+        }
+        choice_score = mapping.get(data, 0)
+        session.relationship_score += choice_score
+
+        session.interaction_step = 3
+        await query.edit_message_text(
+            f"Q3: {session.interaction_partner.title()} wonders — How do you handle conflict?\nChoose:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("Talk it out calmly", callback_data="interaction_3_calm")],
+                [InlineKeyboardButton("Take time alone then discuss", callback_data="interaction_3_alone")],
+                [InlineKeyboardButton("Avoid it and hope it passes", callback_data="interaction_3_avoid")]
+            ])
+        )
+    elif step == 3:
+        mapping = {
+            "interaction_3_calm": 2,
+            "interaction_3_alone": 1,
+            "interaction_3_avoid": -1
+        }
+        choice_score = mapping.get(data, 0)
+        session.relationship_score += choice_score
+
+        # Interaction done for the day, move to next day or final pick
+        session.interaction_in_progress = False
+        session.interaction_partner = None
+        session.interaction_step = 0
+
+        day = session.day
+        session.day += 1  # advance day after interaction
+
+        await query.edit_message_text(
+            f"Interaction complete! Your relationship score changed by {choice_score}.\n"
+            f"Current total relationship score: {session.relationship_score}\n\n"
+            f"Day {day} interaction ended."
+        )
+
+        # If day <=5, start next day; else, final pick
+        if day == 1:
+            await begin_day_two(query, session)
+        elif day == 2:
+            await begin_day_three(query, session)
+        elif day == 3:
+            await begin_day_four(query, session)
+        elif day == 4:
+            await begin_day_five(query, session)
+        elif day >= 5:
+            await present_final_pick(query, session)
 
 async def present_final_pick(query, session):
     gender = session.gender
@@ -385,36 +456,21 @@ async def handle_final_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         msg = f"You chose {partner_name} as your partner! What a romantic ending! 💖"
 
-    # Find top moment (day with highest decision score)
-    if session.daily_decisions:
-        top_day = max(session.daily_decisions, key=session.daily_decisions.get)
-        top_score = session.daily_decisions[top_day]
-        moment_msgs = {
-            1: "Your sweet date on Day 1 set the tone for the show.",
-            2: "The group activity you planned on Day 2 brought everyone closer.",
-            3: "Your talent show performance on Day 3 stole the spotlight.",
-            4: "The surprise party on Day 4 was unforgettable.",
-            5: "Your heartfelt speech on Day 5 touched all hearts.",
-        }
-        top_moment = moment_msgs.get(top_day, "Many memorable moments throughout the game!")
-    else:
-        top_moment = "A game full of surprises!"
-
-    summary = (
-        f"{msg}\n\n"
-        f"✨ *Your Partner's Personality:* {personality}\n"
-        f"🌟 *Your Top Moment:* {top_moment}\n\n"
-        f"Thanks for playing *Love is a Bot Game*! 🎉\n"
-        f"Share the fun with your friends: https://t.me/LoveIsABotGameBot"
+    # Final summary including relationship score
+    await query.edit_message_text(
+        f"{msg}\n\nFinal relationship score: {session.relationship_score}\n"
+        f"Thanks for playing Love is a Bot Game! Share this with your friends. Use /restart to play again."
     )
 
-    await query.edit_message_text(summary, parse_mode='Markdown')
-
-def main():
-    app = ApplicationBuilder().token("BOT_TOKEN").build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(button))
-    app.run_polling()
-
 if __name__ == '__main__':
-    main()
+    import logging
+    logging.basicConfig(level=logging.INFO)
+    TOKEN = "7998825655:AAHbc2Pfkl6iqfM4ZI1iv-RmUhhJIGW5SCI"
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("restart", restart))
+    app.add_handler(CallbackQueryHandler(button))
+
+    print("Bot started...")
+    app.run_polling()
