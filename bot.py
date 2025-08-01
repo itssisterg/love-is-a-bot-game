@@ -4,11 +4,7 @@ Created by @itssisterg
 GitHub: https://github.com/itssisterg
 """
 import os
-from dotenv import load_dotenv
-
-load_dotenv()  # load variables from .env file
-
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+BOT_TOKEN = "7998825655:AAHbc2Pfkl6iqfM4ZI1iv-RmUhhJIGW5SCI"
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
