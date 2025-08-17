@@ -476,7 +476,7 @@ async def handle_final_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     import logging
     logging.basicConfig(level=logging.INFO)
-    TOKEN = "7998825655:AAHbc2Pfkl6iqfM4ZI1iv-RmUhhJIGW5SCI"
+    TOKEN = "XX"
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
